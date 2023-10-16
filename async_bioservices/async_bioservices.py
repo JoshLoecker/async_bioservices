@@ -2,30 +2,19 @@ import asyncio
 import pandas as pd
 from enum import Enum
 from bioservices import BioDBNet
+from typing import Union, List
 
-import requests
-
-# Import InsecureRequestWarning
-
-
-# requests.packages.urllib3.disable_warnings()
-
-try:
-    from input_database import InputDatabase
-    from output_database import OutputDatabase
-    from taxon_ids import TaxonIDs
-except ImportError:
-    from .input_database import InputDatabase
-    from .output_database import OutputDatabase
-    from .taxon_ids import TaxonIDs
+from input_database import InputDatabase
+from output_database import OutputDatabase
+from taxon_ids import TaxonIDs
 
 
 class _AsyncBioservices:
     biodbnet: BioDBNet = None
     
-    def __init__(self, quiet: bool):
+    def __init__(self, quiet: bool, cache: bool):
         if _AsyncBioservices.biodbnet is None:
-            biodbnet = BioDBNet(verbose=not quiet)  # Invert quiet to verbose
+            biodbnet = BioDBNet(verbose=not quiet, cache=cache)  # Invert quiet to verbose
             biodbnet.services.settings.TIMEOUT = 60
             _AsyncBioservices.biodbnet = biodbnet
             self.biodbnet = _AsyncBioservices.biodbnet
@@ -98,12 +87,14 @@ async def _fetch_gene_info_manager(
 def fetch_gene_info(
     input_values: list[str],
     input_db: InputDatabase,
-    output_db: OutputDatabase | list[OutputDatabase] = None,
-    taxon_id: TaxonIDs | int = TaxonIDs.HOMO_SAPIENS.value,
-    delay: int = 5,
+    output_db: Union[OutputDatabase, List[OutputDatabase]] = None,
+    taxon_id: Union[TaxonIDs, int] = TaxonIDs.HOMO_SAPIENS.value,
     quiet: bool = False,
     remove_duplicates: bool = False,
-    concurrency: int = 15
+    cache: bool = True,
+    delay: int = 5,
+    concurrency: int = 8,
+    batch_length: int = 300
 ) -> pd.DataFrame:
     """
     This function returns a dataframe with important gene information for future operations in MADRID.
@@ -112,15 +103,16 @@ def fetch_gene_info(
     :param input_db: The input database to use (default: "Ensembl Gene ID")
     :param output_db: The output format to use (default: ["Gene Symbol", "Gene ID", "Chromosomal Location"])
     :param delay: The delay in seconds to wait before trying again if bioDBnet is busy (default: 15)
+    :param cache: Should results be cached
     :param taxon_id: The taxon ID to use (default: 9606)
     :param quiet: Should the conversions show output or not?
+    :param remove_duplicates: Should duplicate values be removed from the resulting dataframe?
     :param concurrency: The number of concurrent connections to make to BioDBNet
+    :param batch_length: The maximum number of items to convert at a time
     :return: A dataframe with specified columns as "output_db" (Default is HUGO symbol, Entrez ID, and chromosome start and end positions)
     """
-    
     input_values = [str(i) for i in input_values]
     input_db_value = input_db.value
-    batch_length: int = 100
     
     output_db_values: list[str]
     if output_db is None:
@@ -143,8 +135,16 @@ def fetch_gene_info(
     else:
         taxon_id_value: int = int(taxon_id)
     
-    # biodbnet = BioDBNet()
-    biodbnet = _AsyncBioservices(quiet=quiet)
+    # Validate input settings
+    if concurrency > 20:
+        raise ValueError(f"Concurrency cannot be greater than 20. {concurrency} was given.")
+    
+    if batch_length > 500 and taxon_id_value == TaxonIDs.HOMO_SAPIENS.value:
+        raise ValueError(f"Batch length cannot be greater than 500 for Homo Sapiens. {batch_length} was given.")
+    elif batch_length > 300 and taxon_id_value == TaxonIDs.MUS_MUSCULUS.value:
+        raise ValueError(f"Batch length cannot be greater than 300 for Mus Musculus. {batch_length} was given.")
+    
+    biodbnet = _AsyncBioservices(quiet=quiet, cache=cache)
     biodbnet.biodbnet.services.TIMEOUT = 60
     
     dataframe_maps: pd.DataFrame = pd.DataFrame([], columns=output_db_values)
@@ -175,8 +175,11 @@ def fetch_gene_info(
         async_tasks.append(task)
     
     database_convert = event_loop.run_until_complete(
-        _fetch_gene_info_manager(tasks=async_tasks, batch_length=batch_length, quiet=quiet))
-    event_loop.close()  # Close the event loop to free resources
+        _fetch_gene_info_manager(tasks=async_tasks, batch_length=batch_length, quiet=quiet)
+    )
+    
+    # Close the event loop to free resources
+    event_loop.close()
     
     # Loop over database_convert to concat them into dataframe_maps
     if not quiet:
@@ -193,3 +196,38 @@ def fetch_gene_info(
         dataframe_maps = dataframe_maps[~dataframe_maps.index.duplicated(keep='first')]
     
     return dataframe_maps
+
+
+if __name__ == '__main__':
+    import time
+    
+    print("No cache")
+    cache = False
+    for i in range(3):
+        if i == 2:
+            cache = True
+        start = time.time()
+        results = fetch_gene_info(
+            input_values=[str(i) for i in range(10000)],
+            input_db=InputDatabase.GENE_ID,
+            output_db=OutputDatabase.GENE_SYMBOL,
+            taxon_id=TaxonIDs.HOMO_SAPIENS,
+            cache=cache,
+            quiet=True
+        )
+        end = time.time()
+        print(f"Total time: {end - start}")
+    
+    print("\nCache")
+    for i in range(3):
+        start = time.time()
+        results = fetch_gene_info(
+            input_values=[str(i) for i in range(70000)],
+            input_db=InputDatabase.GENE_ID,
+            output_db=OutputDatabase.GENE_SYMBOL,
+            taxon_id=TaxonIDs.HOMO_SAPIENS,
+            cache=cache,
+            quiet=True
+        )
+        end = time.time()
+        print(f"Total time: {end - start}")
