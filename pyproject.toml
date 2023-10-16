@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "async-bioservices"
-version = "0.1.0"
+version = "1.0.0"
 description = "This is an asynchronous method of accessing bioservice's db2db function"
 authors = ["Josh Loecker <joshloecker@icloud.com>"]
 readme = "README.md"
