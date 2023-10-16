@@ -1,7 +1,7 @@
 from enum import Enum
 
 
-class TaxonIDs(Enum):
+class TaxonID(Enum):
     """
     The taxon IDs are the same as the taxon IDs used in BioDBNet.
     """
