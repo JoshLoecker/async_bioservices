@@ -26,9 +26,9 @@ async def _async_fetch_info(
     biodbnet: BioDBNet,
     event_loop: asyncio.AbstractEventLoop,
     semaphore: asyncio.Semaphore,
-    input_values: list[str],
+    input_values: List[str],
     input_db: str,
-    output_db: list[str],
+    output_db: List[str],
     taxon_id: int,
     delay: int = 10
 ) -> pd.DataFrame:
@@ -45,8 +45,8 @@ async def _async_fetch_info(
     # If the above db2db conversion didn't work, try again until it does
     if not isinstance(conversion, pd.DataFrame):
         # Errors will occur on a timeouut. If this happens, split our working dataset in two and try again
-        first_set: list[str] = input_values[:len(input_values) // 2]
-        second_set: list[str] = input_values[len(input_values) // 2:]
+        first_set: List[str] = input_values[:len(input_values) // 2]
+        second_set: List[str] = input_values[len(input_values) // 2:]
         
         await asyncio.sleep(delay)
         first_conversion: pd.DataFrame = await _async_fetch_info(
@@ -66,11 +66,11 @@ async def _async_fetch_info(
 
 
 async def _fetch_gene_info_manager(
-    tasks: list[asyncio.Task[pd.DataFrame]],
+    tasks: List[asyncio.Task[pd.DataFrame]],
     batch_length: int,
     quiet: bool
 ) -> list[pd.DataFrame]:
-    results: list[pd.DataFrame] = []
+    results: List[pd.DataFrame] = []
     
     if not quiet:
         print("Collecting genes... ", end="")
@@ -85,7 +85,7 @@ async def _fetch_gene_info_manager(
 
 
 def fetch_gene_info(
-    input_values: list[str],
+    input_values: List[str],
     input_db: InputDatabase,
     output_db: Union[OutputDatabase, List[OutputDatabase]] = None,
     taxon_id: Union[TaxonID, int] = TaxonID.HOMO_SAPIENS.value,
@@ -114,7 +114,7 @@ def fetch_gene_info(
     input_values = [str(i) for i in input_values]
     input_db_value = input_db.value
     
-    output_db_values: list[str]
+    output_db_values: List[str]
     if output_db is None:
         output_db_values = [
             OutputDatabase.GENE_SYMBOL.value,
@@ -198,38 +198,3 @@ def fetch_gene_info(
     # Move index to column
     dataframe_maps.reset_index(inplace=True)
     return dataframe_maps
-
-
-if __name__ == '__main__':
-    import time
-    
-    print("No cache")
-    cache = False
-    for i in range(3):
-        if i == 2:
-            cache = True
-        start = time.time()
-        results = fetch_gene_info(
-            input_values=[str(i) for i in range(10000)],
-            input_db=InputDatabase.GENE_ID,
-            output_db=OutputDatabase.GENE_SYMBOL,
-            taxon_id=TaxonID.HOMO_SAPIENS,
-            cache=cache,
-            quiet=True
-        )
-        end = time.time()
-        print(f"Total time: {end - start}")
-    
-    print("\nCache")
-    for i in range(3):
-        start = time.time()
-        results = fetch_gene_info(
-            input_values=[str(i) for i in range(70000)],
-            input_db=InputDatabase.GENE_ID,
-            output_db=OutputDatabase.GENE_SYMBOL,
-            taxon_id=TaxonID.HOMO_SAPIENS,
-            cache=cache,
-            quiet=True
-        )
-        end = time.time()
-        print(f"Total time: {end - start}")
