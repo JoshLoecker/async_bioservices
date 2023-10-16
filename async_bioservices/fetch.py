@@ -198,38 +198,3 @@ def fetch_gene_info(
     # Move index to column
     dataframe_maps.reset_index(inplace=True)
     return dataframe_maps
-
-
-if __name__ == '__main__':
-    import time
-    
-    print("No cache")
-    cache = False
-    for i in range(3):
-        if i == 2:
-            cache = True
-        start = time.time()
-        results = fetch_gene_info(
-            input_values=[str(i) for i in range(10000)],
-            input_db=InputDatabase.GENE_ID,
-            output_db=OutputDatabase.GENE_SYMBOL,
-            taxon_id=TaxonID.HOMO_SAPIENS,
-            cache=cache,
-            quiet=True
-        )
-        end = time.time()
-        print(f"Total time: {end - start}")
-    
-    print("\nCache")
-    for i in range(3):
-        start = time.time()
-        results = fetch_gene_info(
-            input_values=[str(i) for i in range(70000)],
-            input_db=InputDatabase.GENE_ID,
-            output_db=OutputDatabase.GENE_SYMBOL,
-            taxon_id=TaxonID.HOMO_SAPIENS,
-            cache=cache,
-            quiet=True
-        )
-        end = time.time()
-        print(f"Total time: {end - start}")
