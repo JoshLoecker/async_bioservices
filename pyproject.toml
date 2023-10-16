@@ -12,8 +12,10 @@ pandas = ">=1.5.3"
 bioservices = "<2"
 
 
-[tool.poetry.dev-dependencies]
+[tool.poetry.group.test.dependencies]
 pytest = ">=7.4.2"
+pytest-asyncio = ">=0.21.1"
+coverage = ">=7.3.2"
 
 [build-system]
 requires = ["poetry-core"]
