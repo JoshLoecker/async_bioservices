@@ -9,7 +9,7 @@ packages = [{ include = "async_bioservices" }]
 [tool.poetry.dependencies]
 python = ">=3.8,<3.11"
 pandas = ">=1.5.3"
-bioservices = "^1.11.2"
+bioservices = "<2"
 
 
 [tool.poetry.dev-dependencies]
