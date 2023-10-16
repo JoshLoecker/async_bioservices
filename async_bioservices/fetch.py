@@ -2,7 +2,7 @@ import asyncio
 import pandas as pd
 from enum import Enum
 from bioservices import BioDBNet
-from typing import Union, List
+from typing import Union, List, Iterable
 
 from async_bioservices.input_database import InputDatabase
 from async_bioservices.output_database import OutputDatabase
@@ -87,8 +87,12 @@ async def _fetch_gene_info_manager(
 def fetch_gene_info(
     input_values: List[str],
     input_db: InputDatabase,
-    output_db: Union[OutputDatabase, List[OutputDatabase]] = None,
-    taxon_id: Union[TaxonID, int] = TaxonID.HOMO_SAPIENS.value,
+    output_db: Union[OutputDatabase, Iterable[OutputDatabase]] = (
+        OutputDatabase.GENE_SYMBOL.value,
+        OutputDatabase.GENE_ID.value,
+        OutputDatabase.CHROMOSOMAL_LOCATION.value
+    ),
+    taxon_id: Union[TaxonID, int] = TaxonID.HOMO_SAPIENS,
     quiet: bool = False,
     remove_duplicates: bool = False,
     cache: bool = True,
@@ -114,14 +118,7 @@ def fetch_gene_info(
     input_values = [str(i) for i in input_values]
     input_db_value = input_db.value
     
-    output_db_values: List[str]
-    if output_db is None:
-        output_db_values = [
-            OutputDatabase.GENE_SYMBOL.value,
-            OutputDatabase.GENE_ID.value,
-            OutputDatabase.CHROMOSOMAL_LOCATION.value
-        ]
-    elif isinstance(output_db, OutputDatabase) or isinstance(output_db, Enum):
+    if isinstance(output_db, OutputDatabase) or isinstance(output_db, Enum):
         output_db_values = [output_db.value]
     else:
         output_db_values = [str(i.value) for i in output_db]
