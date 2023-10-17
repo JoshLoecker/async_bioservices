@@ -203,9 +203,6 @@ async def db2db(
     
     # Move index to column
     main_df.reset_index(inplace=True, drop=True)
-    
-    print(len(main_df))
-    
     return main_df
 
 
@@ -214,5 +211,4 @@ if __name__ == "__main__":
         input_values=[str(i) for i in range(1, 10_000)],
         input_db=InputDatabase.GENE_ID,
         output_db=OutputDatabase.GENE_SYMBOL,
-        # batch_length=1
     ))
