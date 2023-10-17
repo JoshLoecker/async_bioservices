@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "async-bioservices"
-version = "1.0.0"
+version = "2.0.0"
 description = "This is an asynchronous method of accessing bioservice's db2db function"
 authors = ["Josh Loecker <joshloecker@icloud.com>"]
 readme = "README.md"
@@ -10,7 +10,6 @@ packages = [{ include = "async_bioservices" }]
 python = ">=3.9,<3.11"
 pandas = ">=1.5.3"
 bioservices = "<2"
-
 
 [tool.poetry.group.test.dependencies]
 pytest = ">=7.4.2"

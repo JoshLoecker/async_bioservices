@@ -1,21 +1,19 @@
 import pytest
 import pandas as pd
 
-from async_bioservices.fetch import fetch_gene_info
-from async_bioservices.input_database import InputDatabase
-from async_bioservices.output_database import OutputDatabase
-from async_bioservices.taxon_id import TaxonID
+from async_bioservices import db2db, InputDatabase, OutputDatabase, TaxonID
 
 
 @pytest.mark.parametrize("cache", [True, False])
-def test_fetch_gene_info(cache):
+@pytest.mark.asyncio
+async def test_fetch_gene_info(cache):
     input_values = [str(i) for i in range(100)]
     input_db = InputDatabase.GENE_ID
     output_db = OutputDatabase.GENE_SYMBOL
     taxon_id = TaxonID.HOMO_SAPIENS
     quiet = True
     
-    result: pd.DataFrame = fetch_gene_info(
+    result: pd.DataFrame = await db2db(
         input_values=input_values,
         input_db=input_db,
         output_db=output_db,
@@ -26,12 +24,15 @@ def test_fetch_gene_info(cache):
     
     assert isinstance(result, pd.DataFrame)
     assert len(result) == len(input_values)
-    assert all(col in result.columns for col in [input_db.value, output_db.value])
+    
+    assert 'Gene Symbol' in result.columns
+    assert 'Gene ID' in result.columns
 
 
-def test_fetch_gene_info_invalid_input_db_in_output_db():
+@pytest.mark.asyncio
+async def test_fetch_gene_info_invalid_input_db_in_output_db():
     with pytest.raises(ValueError):
-        fetch_gene_info(
+        await db2db(
             input_values=["123"],
             input_db=InputDatabase.GENE_ID,
             output_db=OutputDatabase.GENE_ID,
@@ -41,9 +42,10 @@ def test_fetch_gene_info_invalid_input_db_in_output_db():
         )
 
 
-def test_fetch_gene_info_invalid_concurrency():
+@pytest.mark.asyncio
+async def test_fetch_gene_info_invalid_concurrency():
     with pytest.raises(ValueError):
-        fetch_gene_info(
+        await db2db(
             input_values=["123"],
             input_db=InputDatabase.GENE_ID,
             output_db=OutputDatabase.GENE_SYMBOL,
@@ -54,9 +56,10 @@ def test_fetch_gene_info_invalid_concurrency():
         )
 
 
-def test_fetch_gene_info_invalid_batch_length():
+@pytest.mark.asyncio
+async def test_fetch_gene_info_invalid_batch_length():
     with pytest.raises(ValueError):
-        fetch_gene_info(
+        await db2db(
             input_values=["123"],
             input_db=InputDatabase.GENE_ID,
             output_db=OutputDatabase.GENE_SYMBOL,
