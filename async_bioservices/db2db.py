@@ -4,7 +4,9 @@ from bioservices import BioDBNet
 from multiprocessing import Value
 from typing import Union, List, Iterable
 
-from async_bioservices import InputDatabase, OutputDatabase, TaxonID
+from async_bioservices.input_database import InputDatabase
+from async_bioservices.output_database import OutputDatabase
+from async_bioservices.taxon_id import TaxonID
 
 
 class _AsyncBioservices:
