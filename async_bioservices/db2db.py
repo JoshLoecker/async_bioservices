@@ -100,7 +100,7 @@ async def db2db(
     pass
     """
     Convert gene information using BioDBNet
-    
+
     :param input_values: A list of genes in "input_db" format
     :param input_db: The input database to use (default: "Ensembl Gene ID")
     :param output_db: The output format to use (default: ["Gene Symbol", "Gene ID", "Chromosomal Location"])
