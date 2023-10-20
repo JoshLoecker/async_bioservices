@@ -1,57 +1,237 @@
+import os
 import asyncio
+import aiosqlite
+from aiosqlite import Cursor, Connection
 import pandas as pd
 from bioservices import BioDBNet
 from multiprocessing import Value
-from typing import Union, List, Iterable
+from typing import Union, List, Iterable, Set
+
+from pandas import DataFrame
 
 from async_bioservices.input_database import InputDatabase
 from async_bioservices.output_database import OutputDatabase
 from async_bioservices.taxon_id import TaxonID
 
 
-class _AsyncBioservices:
+class _db2db:
     biodbnet: BioDBNet = None
     
     def __init__(self, quiet: bool, cache: bool):
-        if _AsyncBioservices.biodbnet is None:
-            biodbnet = BioDBNet(verbose=not quiet, cache=cache)  # Invert quiet to verbose
+        if _db2db.biodbnet is None:
+            biodbnet = BioDBNet(verbose=not quiet)  # Invert quiet to verbose
             biodbnet.services.settings.TIMEOUT = 60
-            _AsyncBioservices.biodbnet = biodbnet
-            self.biodbnet = _AsyncBioservices.biodbnet
+            _db2db.biodbnet = biodbnet
+        
+        self.cache: bool = cache
+        self._table_name: str = "db2db"
+        self.biodbnet = _db2db.biodbnet
+        self.connection: Connection = None
+        self._db_columns: List[str] = ["id", "taxon_id"]
+    
+    @classmethod
+    async def init(cls, quiet: bool, cache: bool) -> "_db2db":
+        instance = cls(quiet=quiet, cache=cache)
+        
+        database_dir = _db2db.biodbnet.services.settings.user_cache_dir
+        database_file = os.path.join(database_dir, "async_biodbnet.db")
+        instance.connection = await aiosqlite.connect(database_file)
+        
+        await instance.connection.execute(f"""
+        CREATE TABLE IF NOT EXISTS {instance._table_name}(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            taxon_id INTEGER
+        );
+        """)
+        await instance.connection.commit()
+        
+        return instance
+    
+    async def close(self):
+        if self.connection:
+            await self.connection.close()
+    
+    async def _add_columns(self, columns: List[str]):
+        cursor: Cursor = await self.connection.execute(f"PRAGMA table_info({self._table_name})")
+        columns_in_db: List[str] = [i[1] for i in await cursor.fetchall()]
+        await cursor.close()
+        for column in columns:
+            if column not in self._db_columns:
+                self._db_columns.append(column)
+            
+            if column not in columns_in_db:
+                await self.connection.execute(f"ALTER TABLE {self._table_name} ADD COLUMN {column} TEXT")
+                await self.connection.commit()
+    
+    async def _get_from_cache(self, input_db: str, value: str, taxon_id: int) -> pd.DataFrame:
+        """
+        This function will get the row from the database under the column "input_db" where the value is "value"
+        :return:
+        """
+        
+        # Update the query to match taxon_id
+        cursor: Cursor = await self.connection.execute(
+            f"SELECT * FROM {self._table_name} WHERE taxon_id=? AND {input_db}=?",
+            (taxon_id, value)
+        )
+        row = await cursor.fetchall()
+        await cursor.close()
+        
+        df: DataFrame = pd.DataFrame(row, columns=self._db_columns)
+        df.set_index("id", inplace=True)
+        
+        if df.empty:
+            # If the dataframe is empty, set the following:
+            # taxon_id: taxon_id
+            # input_db: value
+            # Remaining values: pd.NA
+            # *[pd.NA] * (len(df.columns) - 2]: The number of columns minus 2 (taxon_id, `input_db`)
+            df.loc[0] = [taxon_id, value, *[pd.NA] * (len(df.columns) - 2)]
+        
+        df.fillna(pd.NA, inplace=True)
+        
+        return df
+    
+    async def _add_to_cache(self, df: pd.DataFrame, taxon_id: int):
+        # Get the current columns of the dataframe
+        
+        # Make columns lowercase
+        df.columns = [i.replace(" ", "_").lower() for i in df.columns]
+        db_columns = ["taxon_id"] + list(df.columns)
+        
+        # Create a new column to determine which rows already exist in the database and should be updated
+        df["exists"] = False
+        index: int
+        row: pd.Series
+        for index, row in df.iterrows():
+            # First, find if the row exists in the database. Search by taxon_id and db_columns[0]
+            cursor: Cursor = await self.connection.execute(
+                f"SELECT 1 FROM {self._table_name} WHERE taxon_id=? AND {db_columns[1]}=?",
+                (taxon_id, row[db_columns[1]])
+            )
+            row_exists = await cursor.fetchall()  # Will be `1` if the row exists, otherwise None
+            await cursor.close()
+            
+            if row_exists:
+                df.loc[index, "exists"] = True
+        
+        insert_df = df[df["exists"] == False].copy()
+        insert_df.drop(columns=["exists"], inplace=True)
+        insert_values = [(taxon_id, *row.values.tolist()) for index, row in insert_df.iterrows()]
+        
+        update_df = df[df["exists"] == True].copy()
+        update_df.drop(columns=["exists"], inplace=True)
+        update_values = [(taxon_id, *row.values.tolist()) for index, row in update_df.iterrows()]
+        
+        insert_command = f"INSERT INTO {self._table_name} ({', '.join(db_columns)}) VALUES ({', '.join(['?'] * len(db_columns))})"
+        update_command = f"UPDATE {self._table_name} SET {', '.join([f'{i}=?' for i in db_columns[1:]])} WHERE taxon_id=? AND {db_columns[1]}=?"
+        
+        await self.connection.executemany(insert_command, insert_values)
+        await self.connection.executemany(update_command, update_values)
+        
+        await self.connection.commit()
+    
+    #         # If db_row is empty, then the row doesn't exist in the database. Add it
+    #         if not row_exists:
+    #             command = f"INSERT INTO {self._table_name} ({', '.join(db_columns)}) VALUES ({', '.join(['?'] * len(db_columns))})"
+    #             values = (taxon_id, *row.values.tolist())
+    #             await self.connection.execute(command, values)
+    #             await self.connection.commit()
+    #         else:
+    #             # Update the db_row with the new values. The column should be the same as the db_columns[1:]
+    #             # The values should be the same as row[db_columns[1:]]
+    #             command = f"UPDATE {self._table_name} SET {', '.join([f'{i}=?' for i in db_columns[1:]])} WHERE taxon_id=? AND {db_columns[1]}=?"
+    #             values = (*row.values.tolist()[1:], taxon_id, row[db_columns[1]])
+    #             await self.connection.execute(command, values)
+    #             await self.connection.commit()
+    
+    async def get(
+        self,
+        input_values: List[str],
+        input_db: str,
+        output_db: List[str],
+        taxon_id: int,
+    ) -> pd.DataFrame:
+        
+        sanitize_input_db = input_db.replace(" ", "_").lower()
+        sanitize_output_db = [i.replace(" ", "_").lower() for i in output_db]
+        columns_to_return = [sanitize_input_db] + sanitize_output_db
+        cache_df = pd.DataFrame(columns=["taxon_id", sanitize_input_db] + sanitize_output_db)
+        
+        if self.cache:
+            await self._add_columns([sanitize_input_db] + sanitize_output_db)
+            for item in input_values:
+                row_df: pd.DataFrame = await self._get_from_cache(sanitize_input_db, item, taxon_id)
+                cache_df = pd.concat([cache_df, row_df], ignore_index=True)
+            not_in_cache: pd.DataFrame = cache_df[cache_df[sanitize_output_db].apply(lambda x: x.isna().any(), axis=1)]
         else:
-            self.biodbnet = _AsyncBioservices.biodbnet
+            not_in_cache = pd.DataFrame()
+            not_in_cache[sanitize_input_db] = input_values
+        
+        # Get input_values not found in df[sanitize_output_db] columns
+        
+        if not not_in_cache.empty:
+            conversion_items = not_in_cache[sanitize_input_db].tolist()
+            conversion: pd.DataFrame = await asyncio.to_thread(
+                self.biodbnet.db2db,
+                input_values=conversion_items,
+                input_db=input_db,
+                output_db=output_db,
+                taxon=taxon_id
+            )
+            conversion.reset_index(inplace=True)
+            conversion.columns = [i.replace(" ", "_").lower() for i in conversion.columns]
+            
+            if self.cache:
+                await self._add_to_cache(conversion.copy(), taxon_id)
+            cache_df = pd.concat([cache_df, conversion], ignore_index=True)
+            cache_df["taxon_id"] = taxon_id
+        
+        cache_df.reset_index(inplace=True, drop=True)
+        return_df = cache_df[cache_df[sanitize_input_db].isin(input_values)]
+        return_df = return_df[columns_to_return]
+        
+        changed_columns = return_df.columns.tolist()
+        changed_columns[0] = input_db
+        changed_columns[1:] = output_db
+        return_df.columns = changed_columns
+        
+        return return_df
 
 
 async def _execute_db2db(
-    biodbnet: BioDBNet,
+    biodbnet: _db2db,
     input_values: List[str],
     input_db: str,
     output_db: List[str],
     taxon_id: int,
-    delay: int = 10
+    delay: int = 10,
 ) -> pd.DataFrame:
-    conversion = await asyncio.to_thread(
-        biodbnet.db2db,
+    conversion: pd.DataFrame = await biodbnet.get(
+        input_values=input_values,
         input_db=input_db,
         output_db=output_db,
-        input_values=input_values,
-        taxon=taxon_id
+        taxon_id=taxon_id
     )
     
     # If the above db2db conversion didn't work, try again until it does
     if not isinstance(conversion, pd.DataFrame):
-        # Errors will occur on a timeouut. If this happens, split our working dataset in two and try again
+        # Errors will occur on a timeout. If this happens, split our working dataset in two and try again
         first_set: List[str] = input_values[:len(input_values) // 2]
         second_set: List[str] = input_values[len(input_values) // 2:]
         
         await asyncio.sleep(delay)
-        first_conversion: pd.DataFrame = await _execute_db2db(
-            biodbnet=biodbnet, input_values=first_set, input_db=input_db,
-            output_db=output_db, taxon_id=taxon_id, delay=delay
+        first_conversion: pd.DataFrame = await biodbnet.get(
+            input_values=first_set,
+            input_db=input_db,
+            output_db=output_db,
+            taxon_id=taxon_id
         )
-        second_conversion: pd.DataFrame = await _execute_db2db(
-            biodbnet=biodbnet, input_values=second_set, input_db=input_db,
-            output_db=output_db, taxon_id=taxon_id, delay=delay
+        second_conversion: pd.DataFrame = await biodbnet.get(
+            input_values=second_set,
+            input_db=input_db,
+            output_db=output_db,
+            taxon_id=taxon_id
         )
         
         return pd.concat([first_conversion, second_conversion])
@@ -140,7 +320,7 @@ async def db2db(
     elif batch_length > 300 and taxon_id_value == TaxonID.MUS_MUSCULUS.value:
         raise ValueError(f"Batch length cannot be greater than 300 for Mus Musculus. {batch_length} was given.")
     
-    biodbnet = _AsyncBioservices(quiet=quiet, cache=cache)
+    biodbnet = await _db2db.init(quiet=quiet, cache=cache)
     biodbnet.biodbnet.services.TIMEOUT = 60
     
     # Define variables
@@ -155,7 +335,7 @@ async def db2db(
         # Define an upper range of values to take from input_values
         upper_range = min(i + batch_length, len(input_values))
         task = _execute_db2db(
-            biodbnet=biodbnet.biodbnet,
+            biodbnet=biodbnet,
             input_values=input_values[i:upper_range],
             input_db=input_db_value,
             output_db=output_db_values,
@@ -175,11 +355,14 @@ async def db2db(
         for _ in range(concurrency)
     ]
     
-    await asyncio.gather(*workers)
-    await queue.join()
+    await asyncio.gather(*workers)  # Start work
+    await queue.join()  # Wait for work to complete
+    await biodbnet.close()
+    # Work is complete and workers are done. Cancel them
     for w in workers:
         w.cancel()
     
+    # Collect results from result_queue
     conversion_results = []
     while not result_queue.empty():
         conversion_results.append(await result_queue.get())
@@ -202,13 +385,47 @@ async def db2db(
         main_df = main_df[~main_df.index.duplicated(keep='first')]
     
     # Move index to column
+    
     main_df.reset_index(inplace=True, drop=True)
     return main_df
 
 
+async def runner():
+    db_path = "/Users/joshl/Library/Caches/bioservices/async_biodbnet.db"
+    table_name = "db2db"
+    async with aiosqlite.connect(db_path) as db:
+        await db.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table_name}(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                taxon_id INTEGER,
+                gene_id TEXT,
+                gene_symbol TEXT
+            );
+        """)
+        
+        await db.execute(f"INSERT INTO {table_name} (taxon_id, gene_id, gene_symbol) VALUES (?,?,?)",
+                         (9096, "1", "123"))
+        await db.execute(f"INSERT INTO {table_name} (taxon_id, gene_id, gene_symbol) VALUES (?,?,?)",
+                         (9096, "4", "456"))
+        await db.execute(f"INSERT INTO {table_name} (taxon_id, gene_id, gene_symbol) VALUES (?,?,?)",
+                         (9096, "7", "789"))
+        await db.commit()
+        
+        # Print all items in the database
+        cursor = await db.execute(f"SELECT * FROM {table_name}")
+        rows = await cursor.fetchall()
+        await cursor.close()
+        print(rows)
+
+
 if __name__ == "__main__":
+    # asyncio.run(runner())
     asyncio.run(db2db(
-        input_values=[str(i) for i in range(1, 10_000)],
+        input_values=[str(i) for i in range(1, 5_000)],
         input_db=InputDatabase.GENE_ID,
-        output_db=OutputDatabase.GENE_SYMBOL,
+        output_db=[OutputDatabase.GENE_SYMBOL, OutputDatabase.ENSEMBL_GENE_ID],
+        taxon_id=TaxonID.HOMO_SAPIENS,
+        quiet=False,
+        concurrency=1,
+        cache=False
     ))
