@@ -5,6 +5,8 @@ name: Unit Tests
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '1 0 * * 0'  # every Sunday at 12:01am
   pull_request:
     branches: [ "master" ]
     types:
